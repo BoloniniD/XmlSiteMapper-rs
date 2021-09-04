@@ -1,2 +1,4 @@
-# SiteMapper
-Skidaddle-skidoodle, your map is now a noodle
+# BoloniniMapper
+A simple sitemapper written in Rust
+
+TODO: describe configs, etc.
