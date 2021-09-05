@@ -1,19 +1,21 @@
+use chrono::{SecondsFormat, Utc};
 use reqwest::{StatusCode, Url};
 use select::document::Document;
 use select::predicate::Name;
 use std::fs::File;
-use std::io::{prelude::*, BufReader, BufWriter, Write};
-use std::{collections::HashMap, collections::HashSet, collections::VecDeque, thread, time};
-
-const DELAY: u64 = 25;
+use std::io::{prelude::*, BufReader};
+use std::{collections::HashMap, collections::HashSet, collections::VecDeque, thread};
+use xml::writer::{EmitterConfig, XmlEvent};
 
 fn scan_link(
     main_url: Url,
     map: &mut HashMap<Url, f64>,
     exts: HashSet<String>,
     chng: HashMap<String, f64>,
+    delay: u64,
 ) {
     // TODO: create a class and split it into several methods
+    // TODO: write comments
     let mut queue: VecDeque<Url> = VecDeque::new();
     let mut set: HashSet<Url> = HashSet::new();
     let mut links: i64 = 1;
@@ -21,7 +23,7 @@ fn scan_link(
     set.insert(main_url.clone());
     while !queue.is_empty() {
         println!("Size of queue: {}", links);
-        let ten_millis = time::Duration::from_millis(DELAY);
+        let ten_millis = std::time::Duration::from_millis(delay);
         thread::sleep(ten_millis);
         let queue_pop = queue.pop_back();
         links -= 1;
@@ -65,16 +67,21 @@ fn scan_link(
             }
         }
         if !map.contains_key(&url) {
-            let query = url.query();
-            match query {
-                Some(q) => {
-                    for i in chng.iter() {
-                        if i.0.contains("PAGEN") {
-                            priority += i.1;
+            let mut query = url.query_pairs();
+            loop {
+                match query.next() {
+                    Some(q) => {
+                        for i in chng.iter() {
+                            let q = q.0.as_ref();
+                            if i.0.contains(q) {
+                                priority += i.1;
+                            }
                         }
                     }
+                    None => {
+                        break;
+                    }
                 }
-                None => {}
             }
             if priority < 0.1 {
                 priority = 0.1;
@@ -86,11 +93,11 @@ fn scan_link(
         let body: reqwest::blocking::Response;
         match client {
             Ok(res) => {
-                println!("Sent a request successfully");
+                println!("Sent a request successfully.");
                 body = res;
             }
             Err(_) => {
-                println!("Failed to send a request");
+                println!("Failed to send a request.");
                 continue;
             }
         }
@@ -110,7 +117,7 @@ fn scan_link(
                         if String::from(st).starts_with("text/html") {
                             println!("Parsing html for links...");
                         } else {
-                            println!("Page is not html: {}", st);
+                            println!("Page is not html: {}.", st);
                             *map.get_mut(&url).unwrap() -= 0.1;
                             continue;
                         }
@@ -121,7 +128,7 @@ fn scan_link(
                 }
             }
             None => {
-                println!("Page does not contain Content-Type header");
+                println!("Page does not contain Content-Type header.");
                 continue;
             }
         }
@@ -130,7 +137,6 @@ fn scan_link(
             Ok(body) => {
                 let html = body;
                 let html = Document::from(html.as_str());
-                println!("Parsing html for...");
                 html.find(Name("a"))
                     .filter_map(|h| h.attr("href"))
                     .for_each(|link| {
@@ -148,6 +154,7 @@ fn scan_link(
                             let query_chk = link.query();
                             match query_chk {
                                 Some(query) => {
+                                    // print versions of pages are mostly equal to regular ones, so we'll skip them
                                     if query.contains("print=Y") {
                                         flag = true;
                                     }
@@ -162,6 +169,7 @@ fn scan_link(
                                             links += 1;
                                             set.insert(link.clone());
                                             queue.push_front(link);
+                                            println!("Added the link to the queue.");
                                         }
                                     }
                                     Err(_) => {}
@@ -178,7 +186,17 @@ fn scan_link(
 }
 
 fn main() {
-    let file = File::create("sitemap.xml").unwrap();
+    let fil = File::create("sitemap.xml");
+    let mut file: File;
+    match fil {
+        Ok(fil) => {
+            file = fil;
+        }
+        Err(_) => {
+            println!("Cannot create file sitemap.xml. Please check if file creation is allowed in the directory.");
+            return;
+        }
+    }
     let mut exts: HashSet<String> = HashSet::new();
     let mut chng: HashMap<String, f64> = HashMap::new();
 
@@ -263,17 +281,30 @@ fn main() {
             }
         }
     }
+    let mut delay: u64 = 25;
     let mut url = String::new();
-    let mut file_writer = BufWriter::new(&file);
     let site = File::open("site.cfg");
     match site {
         Ok(site) => {
             let site = BufReader::new(site);
+            let mut flag: bool = true;
             for line in site.lines() {
                 match line {
                     Ok(line) => {
                         if !line.starts_with("#") {
-                            url = line
+                            if flag {
+                                url = line;
+                                flag = false;
+                            } else {
+                                let delay_chk = line.parse::<u64>();
+                                match delay_chk {
+                                    Ok(d) => delay = d,
+                                    Err(_) => {
+                                        continue;
+                                    }
+                                }
+                                break;
+                            }
                         }
                     }
                     Err(_) => {
@@ -290,6 +321,7 @@ fn main() {
                     println!("===");
                     println!("Created file site.cfg.");
                     println!("Now you can use site.cfg to store URL that is going to be mapped.");
+                    println!("You can specify the delay (in ms) between url requests in the next line. The default is 25 ms.");
                     println!("You can also write comments in site.cfg starting the lines with #.");
                     println!("\nFill in this file and launch the mapper again.");
                     return;
@@ -304,17 +336,38 @@ fn main() {
     match url {
         Ok(_) => {
             let mut map = HashMap::new();
-            scan_link(url.unwrap(), &mut map, exts, chng);
+            scan_link(url.unwrap(), &mut map, exts, chng, delay);
             println!("\n=====\nTotal: {}\n=====", map.len());
+            let mut writer = EmitterConfig::new()
+                .perform_indent(true)
+                .create_writer(&mut file);
+            // TODO: Write a checker for xml writer Result<()>
+            writer.write(XmlEvent::comment("=== Created with BoloniniMapper ==="));
+            writer.write(
+                XmlEvent::start_element("urlset")
+                    .attr("xmlns", "http://www.sitemaps.org/schemas/sitemap/0.9"),
+            );
             for (key, value) in map {
-                writeln!(
-                    &mut file_writer,
-                    "{} {} {:.1}",
-                    String::from(key.as_str()),
-                    " | priority: ",
-                    value
-                );
+                writer.write(XmlEvent::start_element("url"));
+
+                writer.write(XmlEvent::start_element("loc"));
+                writer.write(XmlEvent::characters(key.as_str()));
+                writer.write(XmlEvent::end_element());
+
+                let now = Utc::now();
+                writer.write(XmlEvent::start_element("lastmod"));
+                writer.write(XmlEvent::characters(
+                    &now.to_rfc3339_opts(SecondsFormat::Secs, false),
+                ));
+                writer.write(XmlEvent::end_element());
+
+                writer.write(XmlEvent::start_element("priority"));
+                writer.write(XmlEvent::characters(&format!("{0:.1}", value)));
+                writer.write(XmlEvent::end_element());
+
+                writer.write(XmlEvent::end_element());
             }
+            writer.write(XmlEvent::end_element());
         }
         Err(_) => {
             return;
