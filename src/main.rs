@@ -308,6 +308,10 @@ fn main() {
                         }
                     }
                     Err(_) => {
+                        if flag {
+                            println!("It seems, that sitemapper can't detect an URL in site.cfg.");
+                            println!("Please check if it is correct.")
+                        }
                         continue;
                     }
                 }
