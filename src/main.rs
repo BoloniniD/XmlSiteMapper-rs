@@ -7,14 +7,65 @@ use std::io::{prelude::*, BufReader};
 use std::{collections::HashMap, collections::HashSet, collections::VecDeque, thread};
 use xml::writer::{EmitterConfig, XmlEvent};
 
-fn scan_link(
+// it is planned to implement functionality inside a struct in beta
+
+// main struct, contains site URL, map for <url, priority> results,
+// disallowed extensions, priority changes for special queries and
+// delay between url requests
+struct SiteCrawler {
+    site: Url,
+    map: HashMap<Url, f64>,
+    extensions: HashSet<String>,
+    query_prio_change: HashMap<String, f64>,
+    url_queue: VecDeque<Url>,
+    delay: u64,
+}
+
+fn SiteCrawler::get_extensions() {
+
+}
+
+fn SiteCrawler::get_query() {
+
+}
+
+fn SiteCrawler::get_site_delay() {
+
+}
+
+fn SiteCrawler::calc_prio() -> Result<f64, Err> {
+
+}
+
+fn SiteCrawler::url_norm() -> Result<Url, Err> {
+
+}
+
+fn SiteCrawler::scan_link() {
+
+}
+
+fn SiteCrawler::hrefs_to_queue() {
+
+}
+
+struct FileReader {
+    site: String,
+    extensions: String,
+    query_prio_change: String,
+}
+
+fn open_file_and_get_lines() {
+
+}
+
+/*fn scan_link(
     main_url: Url,
     map: &mut HashMap<Url, f64>,
     exts: HashSet<String>,
     chng: HashMap<String, f64>,
     delay: u64,
 ) {
-    // TODO: create a class and split it into several methods
     // TODO: write comments
     let mut queue: VecDeque<Url> = VecDeque::new();
     let mut set: HashSet<Url> = HashSet::new();
@@ -183,10 +234,10 @@ fn scan_link(
             Err(_) => {}
         }
     }
-}
+}*/
 
 fn main() {
-    let fil = File::create("sitemap.xml");
+    /*let fil = File::create("sitemap.xml");
     let mut file: File;
     match fil {
         Ok(fil) => {
@@ -376,5 +427,5 @@ fn main() {
         Err(_) => {
             return;
         }
-    }
+    }*/
 }
