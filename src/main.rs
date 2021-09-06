@@ -346,7 +346,7 @@ fn main() {
                 .perform_indent(true)
                 .create_writer(&mut file);
             // TODO: Write a checker for xml writer Result<()>
-            writer.write(XmlEvent::comment("=== Created with BoloniniMapper ==="));
+            writer.write(XmlEvent::comment("=== Created with XmlSiteMapper-rs ==="));
             writer.write(
                 XmlEvent::start_element("urlset")
                     .attr("xmlns", "http://www.sitemaps.org/schemas/sitemap/0.9"),

@@ -1,5 +1,5 @@
 [package]
-name = "bolonini_mapper"
+name = "xml_sitemapper-rs"
 version = "0.1.0"
 authors = ["BoloniniD <denis@bolonin.ru>"]
 edition = "2018"

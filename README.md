@@ -1,4 +1,4 @@
-# BoloniniMapper
+# XmlSiteMapper-rs
 A simple sitemapper written in Rust. Crawles through the site and creates xml sitemap.
 
 # How to use
