@@ -3,7 +3,7 @@ use reqwest::{StatusCode, Url};
 use select::document::Document;
 use select::predicate::Name;
 use std::fs::File;
-use std::io::{prelude::*, BufReader};
+use std::io::{prelude::*, BufReader, BufWriter, Write};
 use std::{collections::HashMap, collections::HashSet, collections::VecDeque, thread};
 use xml::writer::{EmitterConfig, XmlEvent};
 
@@ -13,16 +13,22 @@ fn scan_link(
     exts: HashSet<String>,
     chng: HashMap<String, f64>,
     delay: u64,
+    log: &mut File,
 ) {
     // TODO: create a class and split it into several methods
     // TODO: write comments
+    let mut file_writer = BufWriter::new(log);
     let mut queue: VecDeque<Url> = VecDeque::new();
     let mut set: HashSet<Url> = HashSet::new();
     let mut links: i64 = 1;
     queue.push_front(main_url.clone());
     set.insert(main_url.clone());
     while !queue.is_empty() {
-        println!("Size of queue: {}", links);
+        writeln!(
+            &mut file_writer,
+            "\nSize of queue on this iteration: {}",
+            links
+        );
         let ten_millis = std::time::Duration::from_millis(delay);
         thread::sleep(ten_millis);
         let queue_pop = queue.pop_back();
@@ -55,7 +61,7 @@ fn scan_link(
         if url.domain() != main_url.domain() {
             continue;
         }
-        println!("\nWorking with '{}' now", url.as_str());
+        writeln!(&mut file_writer, "\nWorking with '{}' now", url.as_str());
         let seg = url.path_segments();
         let mut priority: f64 = 1.0;
         match seg {
@@ -93,18 +99,18 @@ fn scan_link(
         let body: reqwest::blocking::Response;
         match client {
             Ok(res) => {
-                println!("Sent a request successfully.");
                 body = res;
             }
             Err(_) => {
-                println!("Failed to send a request.");
                 continue;
             }
         }
         match body.status() {
-            StatusCode::OK => println!("Successfully pinged '{}'.", url),
+            StatusCode::OK => {
+                writeln!(&mut file_writer, "Successfully pinged '{}'.", url);
+            }
             s => {
-                println!("Received {} status code, skipping...", s);
+                writeln!(&mut file_writer, "Received {} status code, skipping...", s);
                 continue;
             }
         }
@@ -115,9 +121,7 @@ fn scan_link(
                 match url_check {
                     Ok(st) => {
                         if String::from(st).starts_with("text/html") {
-                            println!("Parsing html for links...");
                         } else {
-                            println!("Page is not html: {}.", st);
                             *map.get_mut(&url).unwrap() -= 0.1;
                             continue;
                         }
@@ -128,7 +132,6 @@ fn scan_link(
                 }
             }
             None => {
-                println!("Page does not contain Content-Type header.");
                 continue;
             }
         }
@@ -140,7 +143,6 @@ fn scan_link(
                 html.find(Name("a"))
                     .filter_map(|h| h.attr("href"))
                     .for_each(|link| {
-                        println!("Found '{}'...", link);
                         if ((link.starts_with('/')) && (link != "/"))
                             || (link.starts_with(main_url.as_str()))
                         {
@@ -169,14 +171,11 @@ fn scan_link(
                                             links += 1;
                                             set.insert(link.clone());
                                             queue.push_front(link);
-                                            println!("Added the link to the queue.");
                                         }
                                     }
                                     Err(_) => {}
                                 }
                             }
-                        } else {
-                            println!("This link is not needed while building a sitemap.")
                         }
                     });
             }
@@ -187,13 +186,24 @@ fn scan_link(
 
 fn main() {
     let fil = File::create("sitemap.xml");
+    let logger = File::create("XmlSiteMapper.log");
     let mut file: File;
+    let mut log: File;
     match fil {
         Ok(fil) => {
             file = fil;
         }
         Err(_) => {
             println!("Cannot create file sitemap.xml. Please check if file creation is allowed in the directory.");
+            return;
+        }
+    }
+    match logger {
+        Ok(logger) => {
+            log = logger;
+        }
+        Err(_) => {
+            println!("Cannot create file XmlSiteMapper.log. Please check if file creation is allowed in the directory.");
             return;
         }
     }
@@ -227,6 +237,10 @@ fn main() {
                     println!("This file is used to contain all file extensions which should be excluded from sitemap.");
                     println!("For example, if .pdf is on the list then link 'https://foo.com/bar.pdf' won't be included in the sitemap.");
                     println!("You can also write comments in site.cfg starting the lines with #.");
+                    let data = "# For example, you can exclude all URLs leading to .png images.
+# To do this, you should write one line per each file type (note, that mapper is case sensetive, so .png and .PNG are different file types for it)\n# The result should look like next line without '# ':
+# .png\n# This will make all URLs like https://foo.bar/cool_image.png excluded from sitemap.xml.";
+                    std::fs::write("disallow.cfg", data).expect("Unable to write file");
                 }
                 Err(_) => {
                     println!("Unable to create file disallow.cfg.")
@@ -274,6 +288,10 @@ fn main() {
                         "For example 0.5 for raise priority for 0.5 or -0.3 to lower it by 0.3."
                     );
                     println!("You can also write comments in site.cfg starting the lines with #.");
+                    let data = "# For example, you can lower priority for all URLs with PAGEN_1 contained in query.
+# To do this, you should write two lines, containing 1) query name 2) priority change\n# The result should look like next two comment lines without '# ':
+# PAGEN_1\n# -0.2\n# This will lower priority for all pages like https://foo.bar/PAGEN_1=50 by 0.2.";
+                    std::fs::write("change_prio.cfg", data).expect("Unable to write file");
                 }
                 Err(_) => {
                     println!("Unable to create file change_prio.cfg.")
@@ -328,6 +346,9 @@ fn main() {
                     println!("You can specify the delay (in ms) between url requests in the next line. The default is 25 ms.");
                     println!("You can also write comments in site.cfg starting the lines with #.");
                     println!("\nFill in this file and launch the mapper again.");
+                    let data = "# Write your site root URL in the next line. Please, include protocol in the URL (http or https).\n
+# Write the delay in milliseconds between URL requests in the next line (this one is optional, but may be useful if your site blocks bots by number of requests per time fragment):\n";
+                    std::fs::write("site.cfg", data).expect("Unable to write file");
                     return;
                 }
                 Err(_) => {
@@ -340,8 +361,9 @@ fn main() {
     match url {
         Ok(_) => {
             let mut map = HashMap::new();
-            scan_link(url.unwrap(), &mut map, exts, chng, delay);
-            println!("\n=====\nTotal: {}\n=====", map.len());
+            println!("All necessary files checked, starting sitemap.xml generation.");
+            scan_link(url.unwrap(), &mut map, exts, chng, delay, &mut log);
+            println!("\n=====\nTotal urls added: {}\n=====", map.len());
             let mut writer = EmitterConfig::new()
                 .perform_indent(true)
                 .create_writer(&mut file);
@@ -372,6 +394,7 @@ fn main() {
                 writer.write(XmlEvent::end_element());
             }
             writer.write(XmlEvent::end_element());
+            println!("sitemap.xml generation is completed. You can find it in the same directory with the executable.");
         }
         Err(_) => {
             return;
