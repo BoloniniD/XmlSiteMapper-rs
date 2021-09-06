@@ -2,6 +2,7 @@ use chrono::{SecondsFormat, Utc};
 use reqwest::{StatusCode, Url};
 use select::document::Document;
 use select::predicate::Name;
+use std::env;
 use std::fs::File;
 use std::io::{prelude::*, BufReader, BufWriter, Write};
 use std::{collections::HashMap, collections::HashSet, collections::VecDeque, thread};
@@ -185,7 +186,14 @@ fn scan_link(
 }
 
 fn main() {
-    let fil = File::create("sitemap.xml");
+    let args: Vec<String> = env::args().collect();
+    let fil: std::io::Result<File>;
+    match args.get(1) {
+        Some(path) => fil = File::create(String::from(path) + "sitemap.xml"),
+        None => {
+            fil = File::create("sitemap.xml");
+        }
+    }
     let logger = File::create("XmlSiteMapper.log");
     let mut file: File;
     let mut log: File;
