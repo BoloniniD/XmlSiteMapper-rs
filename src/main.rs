@@ -1,4 +1,5 @@
 use chrono::{SecondsFormat, Utc};
+use console::Term;
 use reqwest::{StatusCode, Url};
 use select::document::Document;
 use select::predicate::Name;
@@ -6,7 +7,84 @@ use std::env;
 use std::fs::File;
 use std::io::{prelude::*, BufReader, BufWriter, Write};
 use std::{collections::HashMap, collections::HashSet, collections::VecDeque, thread};
+use xml::common::XmlVersion;
 use xml::writer::{EmitterConfig, XmlEvent};
+
+#[derive(Clone)]
+struct term_writer {
+    term: Term,
+}
+
+impl term_writer {
+    pub fn new() -> term_writer {
+        term_writer {
+            term: Term::stdout(),
+        }
+    }
+
+    pub fn print_progress(&self, links: i64, total: usize) {
+        self.term.clear_last_lines(2);
+        self.term
+            .write_line(&format!("Size of queue on this iteration: {}", links));
+        self.term
+            .write_line(&format!("Total links found: {}", total));
+    }
+
+    pub fn start_progress(&self, links: i64, total: usize) {
+        self.term
+            .write_line(&format!("Size of queue on this iteration: {}", links));
+        self.term
+            .write_line(&format!("Total links found: {}", total));
+    }
+
+    pub fn print_to_term(&self, st: String) {
+        self.term.write_line(&st);
+    }
+}
+
+struct xml_writer {
+    wr_buf: xml::EventWriter<File>,
+}
+
+impl xml_writer {
+    pub fn new(file: File) -> xml_writer {
+        let mut xml_writer = xml_writer {
+            wr_buf: EmitterConfig::new()
+                .perform_indent(true)
+                .create_writer(file),
+        };
+        xml_writer.wr_buf.write(XmlEvent::StartDocument {
+            version: XmlVersion::Version10,
+            standalone: None,
+            encoding: Some("UTF-8"),
+        });
+        xml_writer
+    }
+
+    pub fn write_element(&mut self, key: String, val: String) {
+        self.wr_buf.write(XmlEvent::start_element(key.as_str()));
+        self.wr_buf.write(XmlEvent::characters(val.as_str()));
+        self.wr_buf.write(XmlEvent::end_element());
+    }
+
+    pub fn open_element(&mut self, key: String) {
+        self.wr_buf.write(XmlEvent::start_element(key.as_str()));
+    }
+
+    pub fn open_element_attr(&mut self, key: String, attr_key: String, attr_val: String) {
+        self.wr_buf.write(
+            XmlEvent::start_element(key.as_str()).attr(attr_key.as_str(), attr_val.as_str()),
+        );
+    }
+
+    pub fn close_element(&mut self) {
+        self.wr_buf.write(XmlEvent::end_element());
+    }
+
+    pub fn comment(&mut self, st: String) {
+        self.wr_buf.write(XmlEvent::comment(&st));
+    }
+}
 
 fn scan_link(
     main_url: Url,
@@ -15,6 +93,7 @@ fn scan_link(
     chng: HashMap<String, f64>,
     delay: u64,
     log: &mut File,
+    term: &term_writer,
 ) {
     // TODO: create a class and split it into several methods
     // TODO: write comments
@@ -24,12 +103,14 @@ fn scan_link(
     let mut links: i64 = 1;
     queue.push_front(main_url.clone());
     set.insert(main_url.clone());
+    term.start_progress(links, map.len());
     while !queue.is_empty() {
         writeln!(
             &mut file_writer,
             "\nSize of queue on this iteration: {}",
             links
         );
+        term.print_progress(links, map.len());
         let ten_millis = std::time::Duration::from_millis(delay);
         thread::sleep(ten_millis);
         let queue_pop = queue.pop_back();
@@ -186,11 +267,22 @@ fn scan_link(
 }
 
 fn main() {
+    let term = term_writer::new();
     let args: Vec<String> = env::args().collect();
     let fil: std::io::Result<File>;
+    let mut final_messg = String::new();
     match args.get(1) {
-        Some(path) => fil = File::create(String::from(path) + "sitemap.xml"),
+        Some(path) => {
+            final_messg = format!(
+                "sitemap.xml generation is completed. You can find it here: '{}'.",
+                String::from(path) + "sitemap.xml"
+            );
+            fil = File::create(String::from(path) + "sitemap.xml")
+        }
         None => {
+            final_messg = format!(
+                "sitemap.xml generation is completed. You can find it in the same directory with the executable.",
+            );
             fil = File::create("sitemap.xml");
         }
     }
@@ -202,7 +294,7 @@ fn main() {
             file = fil;
         }
         Err(_) => {
-            println!("Cannot create file sitemap.xml. Please check if file creation is allowed in the directory.");
+            term.print_to_term(format!("Cannot create file sitemap.xml. Please check if file creation is allowed in the directory."));
             return;
         }
     }
@@ -211,7 +303,7 @@ fn main() {
             log = logger;
         }
         Err(_) => {
-            println!("Cannot create file XmlSiteMapper.log. Please check if file creation is allowed in the directory.");
+            term.print_to_term(format!("Cannot create file XmlSiteMapper.log. Please check if file creation is allowed in the directory."));
             return;
         }
     }
@@ -236,22 +328,26 @@ fn main() {
             }
         }
         Err(_) => {
-            println!("File disallow.cfg was not found, creating one instead.");
+            term.print_to_term(format!(
+                "File disallow.cfg was not found, creating one instead."
+            ));
             let chk = File::create("disallow.cfg");
             match chk {
                 Ok(_) => {
-                    println!("===");
-                    println!("Created file disallow.cfg.");
-                    println!("This file is used to contain all file extensions which should be excluded from sitemap.");
-                    println!("For example, if .pdf is on the list then link 'https://foo.com/bar.pdf' won't be included in the sitemap.");
-                    println!("You can also write comments in site.cfg starting the lines with #.");
+                    term.print_to_term(format!("==="));
+                    term.print_to_term(format!("Created file disallow.cfg."));
+                    term.print_to_term(format!("This file is used to contain all file extensions which should be excluded from sitemap."));
+                    term.print_to_term(format!("For example, if .pdf is on the list then link 'https://foo.com/bar.pdf' won't be included in the sitemap."));
+                    term.print_to_term(format!(
+                        "You can also write comments in site.cfg starting the lines with #.",
+                    ));
                     let data = "# For example, you can exclude all URLs leading to .png images.
 # To do this, you should write one line per each file type (note, that mapper is case sensetive, so .png and .PNG are different file types for it)\n# The result should look like next line without '# ':
 # .png\n# This will make all URLs like https://foo.bar/cool_image.png excluded from sitemap.xml.";
                     std::fs::write("disallow.cfg", data).expect("Unable to write file");
                 }
                 Err(_) => {
-                    println!("Unable to create file disallow.cfg.")
+                    term.print_to_term(format!("Unable to create file disallow.cfg."));
                 }
             }
         }
@@ -284,25 +380,29 @@ fn main() {
             }
         }
         Err(_) => {
-            println!("File change_prio.cfg not found, creating one instead.");
+            term.print_to_term(format!(
+                "File change_prio.cfg not found, creating one instead."
+            ));
             let chk = File::create("change_prio.cfg");
             match chk {
                 Ok(_) => {
-                    println!("===");
-                    println!("Created file change_prio.cfg.");
-                    println!("This file is used to show which queries in url should be lowered in priority.");
-                    println!("For each query the first line should contain its name and the second one should contain the number");
-                    println!(
-                        "For example 0.5 for raise priority for 0.5 or -0.3 to lower it by 0.3."
-                    );
-                    println!("You can also write comments in site.cfg starting the lines with #.");
+                    term.print_to_term(format!("==="));
+                    term.print_to_term(format!("Created file change_prio.cfg."));
+                    term.print_to_term(format!("This file is used to show which queries in url should be lowered in priority."));
+                    term.print_to_term(format!("For each query the first line should contain its name and the second one should contain the number"));
+                    term.print_to_term(format!(
+                        "For example 0.5 for raise priority for 0.5 or -0.3 to lower it by 0.3.",
+                    ));
+                    term.print_to_term(format!(
+                        "You can also write comments in site.cfg starting the lines with #.",
+                    ));
                     let data = "# For example, you can lower priority for all URLs with PAGEN_1 contained in query.
 # To do this, you should write two lines, containing 1) query name 2) priority change\n# The result should look like next two comment lines without '# ':
 # PAGEN_1\n# -0.2\n# This will lower priority for all pages like https://foo.bar/PAGEN_1=50 by 0.2.";
                     std::fs::write("change_prio.cfg", data).expect("Unable to write file");
                 }
                 Err(_) => {
-                    println!("Unable to create file change_prio.cfg.")
+                    term.print_to_term(format!("Unable to create file change_prio.cfg."));
                 }
             }
         }
@@ -335,8 +435,10 @@ fn main() {
                     }
                     Err(_) => {
                         if flag {
-                            println!("It seems, that sitemapper can't detect an URL in site.cfg.");
-                            println!("Please check if it is correct.")
+                            term.print_to_term(format!(
+                                "It seems, that sitemapper can't detect an URL in site.cfg.",
+                            ));
+                            term.print_to_term(format!("Please check if it is correct."));
                         }
                         continue;
                     }
@@ -344,23 +446,27 @@ fn main() {
             }
         }
         Err(_) => {
-            println!("File site.cfg not found, creating one instead.");
+            term.print_to_term(format!("File site.cfg not found, creating one instead."));
             let chk = File::create("site.cfg");
             match chk {
                 Ok(_) => {
-                    println!("===");
-                    println!("Created file site.cfg.");
-                    println!("Now you can use site.cfg to store URL that is going to be mapped.");
-                    println!("You can specify the delay (in ms) between url requests in the next line. The default is 25 ms.");
-                    println!("You can also write comments in site.cfg starting the lines with #.");
-                    println!("\nFill in this file and launch the mapper again.");
+                    term.print_to_term(format!("==="));
+                    term.print_to_term(format!("Created file site.cfg."));
+                    term.print_to_term(format!(
+                        "Now you can use site.cfg to store URL that is going to be mapped.",
+                    ));
+                    term.print_to_term(format!("You can specify the delay (in ms) between url requests in the next line. The default is 25 ms."));
+                    term.print_to_term(format!(
+                        "You can also write comments in site.cfg starting the lines with #.",
+                    ));
+                    term.print_to_term(format!("\nFill in this file and launch the mapper again."));
                     let data = "# Write your site root URL in the next line. Please, include protocol in the URL (http or https).\n
 # Write the delay in milliseconds between URL requests in the next line (this one is optional, but may be useful if your site blocks bots by number of requests per time fragment):\n";
                     std::fs::write("site.cfg", data).expect("Unable to write file");
                     return;
                 }
                 Err(_) => {
-                    println!("Unable to create file site.cfg.")
+                    term.print_to_term(format!("Unable to create file site.cfg."));
                 }
             }
         }
@@ -369,40 +475,37 @@ fn main() {
     match url {
         Ok(_) => {
             let mut map = HashMap::new();
-            println!("All necessary files checked, starting sitemap.xml generation.");
-            scan_link(url.unwrap(), &mut map, exts, chng, delay, &mut log);
-            println!("\n=====\nTotal urls added: {}\n=====", map.len());
-            let mut writer = EmitterConfig::new()
-                .perform_indent(true)
-                .create_writer(&mut file);
+            term.print_to_term(format!(
+                "All necessary files checked, starting sitemap.xml generation."
+            ));
+            scan_link(url.unwrap(), &mut map, exts, chng, delay, &mut log, &term);
+            term.print_to_term(format!("\n=====\nTotal urls added: {}\n=====", map.len()));
+            let mut writer = xml_writer::new(file);
             // TODO: Write a checker for xml writer Result<()>
-            writer.write(XmlEvent::comment("=== Created with XmlSiteMapper-rs ==="));
-            writer.write(
-                XmlEvent::start_element("urlset")
-                    .attr("xmlns", "http://www.sitemaps.org/schemas/sitemap/0.9"),
+            writer.comment(String::from("=== Created with XmlSiteMapper-rs ==="));
+            writer.open_element_attr(
+                String::from("urlset"),
+                String::from("xmlns"),
+                String::from("http://www.sitemaps.org/schemas/sitemap/0.9"),
             );
             for (key, value) in map {
-                writer.write(XmlEvent::start_element("url"));
+                writer.open_element(String::from("url"));
 
-                writer.write(XmlEvent::start_element("loc"));
-                writer.write(XmlEvent::characters(key.as_str()));
-                writer.write(XmlEvent::end_element());
+                writer.write_element(String::from("loc"), String::from(key.as_str()));
 
                 let now = Utc::now();
-                writer.write(XmlEvent::start_element("lastmod"));
-                writer.write(XmlEvent::characters(
-                    &now.to_rfc3339_opts(SecondsFormat::Secs, false),
-                ));
-                writer.write(XmlEvent::end_element());
 
-                writer.write(XmlEvent::start_element("priority"));
-                writer.write(XmlEvent::characters(&format!("{0:.1}", value)));
-                writer.write(XmlEvent::end_element());
+                writer.write_element(
+                    String::from("lastmod"),
+                    String::from(now.to_rfc3339_opts(SecondsFormat::Secs, false)),
+                );
 
-                writer.write(XmlEvent::end_element());
+                writer.write_element(String::from("priority"), format!("{0:.1}", value));
+
+                writer.close_element();
             }
-            writer.write(XmlEvent::end_element());
-            println!("sitemap.xml generation is completed. You can find it in the same directory with the executable.");
+            writer.close_element();
+            term.print_to_term(final_messg);
         }
         Err(_) => {
             return;
