@@ -104,6 +104,11 @@ fn scan_link(
     queue.push_front(main_url.clone());
     set.insert(main_url.clone());
     term.start_progress(links, map.len());
+    writeln!(
+        &mut file_writer,
+        "Crawling start: [{}]",
+        Utc::now().time().format("%H:%M:%S")
+    );
     while !queue.is_empty() {
         writeln!(
             &mut file_writer,
@@ -264,46 +269,27 @@ fn scan_link(
             Err(_) => {}
         }
     }
+    writeln!(
+        &mut file_writer,
+        "Crawling end: [{}]\nBuilding file sitemap.xml.",
+        Utc::now().time().format("%H:%M:%S")
+    );
 }
 
 fn main() {
     let term = term_writer::new();
     let args: Vec<String> = env::args().collect();
     let fil: std::io::Result<File>;
-    let mut final_messg = String::new();
-    match args.get(1) {
-        Some(path) => {
-            final_messg = format!(
-                "sitemap.xml generation is completed. You can find it here: '{}'.",
-                String::from(path) + "sitemap.xml"
-            );
-            fil = File::create(String::from(path) + "sitemap.xml")
-        }
-        None => {
-            final_messg = format!(
-                "sitemap.xml generation is completed. You can find it in the same directory with the executable.",
-            );
-            fil = File::create("sitemap.xml");
-        }
-    }
-    let logger = File::create("XmlSiteMapper.log");
-    let mut file: File;
+    let final_messg: String;
+    let logger = File::create("XmlSiteMapper-rs.log");
+    let file: File;
     let mut log: File;
-    match fil {
-        Ok(fil) => {
-            file = fil;
-        }
-        Err(_) => {
-            term.print_to_term(format!("Cannot create file sitemap.xml. Please check if file creation is allowed in the directory."));
-            return;
-        }
-    }
     match logger {
         Ok(logger) => {
             log = logger;
         }
         Err(_) => {
-            term.print_to_term(format!("Cannot create file XmlSiteMapper.log. Please check if file creation is allowed in the directory."));
+            term.print_to_term(format!("Cannot create file XmlSiteMapper-rs.log. Please check if file creation is allowed in the directory."));
             return;
         }
     }
@@ -479,6 +465,30 @@ fn main() {
                 "All necessary files checked, starting sitemap.xml generation."
             ));
             scan_link(url.unwrap(), &mut map, exts, chng, delay, &mut log, &term);
+            match args.get(1) {
+                Some(path) => {
+                    final_messg = format!(
+                        "sitemap.xml generation is completed. You can find it here: '{}'.",
+                        String::from(path) + "sitemap.xml"
+                    );
+                    fil = File::create(String::from(path) + "sitemap.xml")
+                }
+                None => {
+                    final_messg = format!(
+                        "sitemap.xml generation is completed. You can find it in the same directory with the executable.",
+                    );
+                    fil = File::create("sitemap.xml");
+                }
+            }
+            match fil {
+                Ok(fil) => {
+                    file = fil;
+                }
+                Err(_) => {
+                    term.print_to_term(format!("Cannot create file sitemap.xml. Please check if file creation is allowed in the directory."));
+                    return;
+                }
+            }
             term.print_to_term(format!("\n=====\nTotal urls added: {}\n=====", map.len()));
             let mut writer = xml_writer::new(file);
             // TODO: Write a checker for xml writer Result<()>
@@ -506,6 +516,12 @@ fn main() {
             }
             writer.close_element();
             term.print_to_term(final_messg);
+            let mut file_writer = BufWriter::new(log);
+            writeln!(
+                &mut file_writer,
+                "Built file sitemap.xml: [{}]",
+                Utc::now().time().format("%H:%M:%S")
+            );
         }
         Err(_) => {
             return;

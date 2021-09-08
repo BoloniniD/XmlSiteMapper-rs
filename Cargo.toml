@@ -1,5 +1,5 @@
 [package]
-name = "xml_sitemapper-rs"
+name = "XmlSiteMapper-rs"
 version = "0.1.0"
 authors = ["BoloniniD <denis@bolonin.ru>"]
 edition = "2018"
