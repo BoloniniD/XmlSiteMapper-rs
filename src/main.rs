@@ -13,16 +13,21 @@ use xml::writer::{EmitterConfig, XmlEvent};
 #[derive(Clone)]
 struct term_writer {
     term: Term,
+    active: bool,
 }
 
 impl term_writer {
-    pub fn new() -> term_writer {
+    pub fn new(active: bool) -> term_writer {
         term_writer {
             term: Term::stdout(),
+            active,
         }
     }
 
     pub fn print_progress(&self, links: i64, total: usize) {
+        if !self.active {
+            return;
+        }
         self.term.clear_last_lines(2);
         self.term
             .write_line(&format!("Size of queue on this iteration: {}", links));
@@ -31,6 +36,9 @@ impl term_writer {
     }
 
     pub fn start_progress(&self, links: i64, total: usize) {
+        if !self.active {
+            return;
+        }
         self.term
             .write_line(&format!("Size of queue on this iteration: {}", links));
         self.term
@@ -38,6 +46,9 @@ impl term_writer {
     }
 
     pub fn print_to_term(&self, st: String) {
+        if !self.active {
+            return;
+        }
         self.term.write_line(&st);
     }
 }
@@ -277,8 +288,30 @@ fn scan_link(
 }
 
 fn main() {
-    let term = term_writer::new();
     let args: Vec<String> = env::args().collect();
+    let mut active_term = true;
+    let mut path: Option<String> = None;
+    for it in 0..args.len() {
+        let arg = args[it].as_str();
+        match arg {
+            "--help" => {
+                println!("[-p <path>] [-s | --silent]");
+                return;
+            }
+            "--silent" => active_term = false,
+            "-s" => active_term = false,
+            "-p" => match args.get(it + 1) {
+                Some(p) => path = Some(String::from(p)),
+                None => {
+                    path = None;
+                    let term = term_writer::new(true);
+                    term.print_to_term(format!("Found key -p which is not followed by a path, assuming path is executable's directory."));
+                }
+            },
+            _ => {}
+        }
+    }
+    let term = term_writer::new(active_term);
     let fil: std::io::Result<File>;
     let final_messg: String;
     let logger = File::create("XmlSiteMapper-rs.log");
@@ -465,13 +498,13 @@ fn main() {
                 "All necessary files checked, starting sitemap.xml generation."
             ));
             scan_link(url.unwrap(), &mut map, exts, chng, delay, &mut log, &term);
-            match args.get(1) {
+            match path {
                 Some(path) => {
                     final_messg = format!(
                         "sitemap.xml generation is completed. You can find it here: '{}'.",
-                        String::from(path) + "sitemap.xml"
+                        String::from(&path) + "sitemap.xml"
                     );
-                    fil = File::create(String::from(path) + "sitemap.xml")
+                    fil = File::create(String::from(&path) + "sitemap.xml")
                 }
                 None => {
                     final_messg = format!(
