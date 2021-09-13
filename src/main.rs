@@ -117,7 +117,8 @@ fn scan_link(
     term.start_progress(links, map.len());
     writeln!(
         &mut file_writer,
-        "Crawling start: [{}]",
+        "Crawling start: [{}, {}]",
+        Utc::now().date(),
         Utc::now().time().format("%H:%M:%S")
     );
     while !queue.is_empty() {
