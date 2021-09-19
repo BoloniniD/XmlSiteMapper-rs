@@ -1,5 +1,5 @@
 use chrono::{SecondsFormat, Utc};
-use console::Term;
+use regex::Regex;
 use reqwest::{StatusCode, Url};
 use select::document::Document;
 use select::predicate::Name;
@@ -7,95 +7,12 @@ use std::env;
 use std::fs::File;
 use std::io::{prelude::*, BufReader, BufWriter, Write};
 use std::{collections::HashMap, collections::HashSet, collections::VecDeque, thread};
-use xml::common::XmlVersion;
-use xml::writer::{EmitterConfig, XmlEvent};
 
-#[derive(Clone)]
-struct term_writer {
-    term: Term,
-    active: bool,
-}
+mod terminal_writer;
+use terminal_writer::TermWriter;
 
-impl term_writer {
-    pub fn new(active: bool) -> term_writer {
-        term_writer {
-            term: Term::stdout(),
-            active,
-        }
-    }
-
-    pub fn print_progress(&self, links: i64, total: usize) {
-        if !self.active {
-            return;
-        }
-        self.term.clear_last_lines(2);
-        self.term
-            .write_line(&format!("Size of queue on this iteration: {}", links));
-        self.term
-            .write_line(&format!("Total links found: {}", total));
-    }
-
-    pub fn start_progress(&self, links: i64, total: usize) {
-        if !self.active {
-            return;
-        }
-        self.term
-            .write_line(&format!("Size of queue on this iteration: {}", links));
-        self.term
-            .write_line(&format!("Total links found: {}", total));
-    }
-
-    pub fn print_to_term(&self, st: String) {
-        if !self.active {
-            return;
-        }
-        self.term.write_line(&st);
-    }
-}
-
-struct xml_writer {
-    wr_buf: xml::EventWriter<File>,
-}
-
-impl xml_writer {
-    pub fn new(file: File) -> xml_writer {
-        let mut xml_writer = xml_writer {
-            wr_buf: EmitterConfig::new()
-                .perform_indent(true)
-                .create_writer(file),
-        };
-        xml_writer.wr_buf.write(XmlEvent::StartDocument {
-            version: XmlVersion::Version10,
-            standalone: None,
-            encoding: Some("UTF-8"),
-        });
-        xml_writer
-    }
-
-    pub fn write_element(&mut self, key: String, val: String) {
-        self.wr_buf.write(XmlEvent::start_element(key.as_str()));
-        self.wr_buf.write(XmlEvent::characters(val.as_str()));
-        self.wr_buf.write(XmlEvent::end_element());
-    }
-
-    pub fn open_element(&mut self, key: String) {
-        self.wr_buf.write(XmlEvent::start_element(key.as_str()));
-    }
-
-    pub fn open_element_attr(&mut self, key: String, attr_key: String, attr_val: String) {
-        self.wr_buf.write(
-            XmlEvent::start_element(key.as_str()).attr(attr_key.as_str(), attr_val.as_str()),
-        );
-    }
-
-    pub fn close_element(&mut self) {
-        self.wr_buf.write(XmlEvent::end_element());
-    }
-
-    pub fn comment(&mut self, st: String) {
-        self.wr_buf.write(XmlEvent::comment(&st));
-    }
-}
+mod xml_file_writer;
+use xml_file_writer::XmlWriter;
 
 fn scan_link(
     main_url: Url,
@@ -104,7 +21,7 @@ fn scan_link(
     chng: HashMap<String, f64>,
     delay: u64,
     log: &mut File,
-    term: &term_writer,
+    term: &TermWriter,
 ) {
     // TODO: create a class and split it into several methods
     // TODO: write comments
@@ -172,19 +89,21 @@ fn scan_link(
             }
         }
         if !map.contains_key(&url) {
-            let mut query = url.query_pairs();
-            loop {
-                match query.next() {
-                    Some(q) => {
-                        for i in chng.iter() {
-                            let q = q.0.as_ref();
-                            if i.0.contains(q) {
-                                priority += i.1;
-                            }
+            let url_str = url.as_str();
+            for i in chng.iter() {
+                let re = Regex::new(i.0);
+                match re {
+                    Ok(re) => {
+                        if re.is_match(url_str) {
+                            priority += i.1;
                         }
                     }
-                    None => {
-                        break;
+                    Err(_) => {
+                        writeln!(
+                            &mut file_writer,
+                            "Error while parsing a regex from disallow.cfg: {}",
+                            i.0
+                        );
                     }
                 }
             }
@@ -221,7 +140,6 @@ fn scan_link(
                     Ok(st) => {
                         if String::from(st).starts_with("text/html") {
                         } else {
-                            *map.get_mut(&url).unwrap() -= 0.1;
                             continue;
                         }
                     }
@@ -247,21 +165,23 @@ fn scan_link(
                         {
                             let mut flag = false;
                             for i in exts.iter() {
-                                if link.ends_with(i) {
-                                    flag = true;
+                                let re = Regex::new(i);
+                                match re {
+                                    Ok(re) => {
+                                        if re.is_match(link) {
+                                            flag = true;
+                                        }
+                                    }
+                                    Err(_) => {
+                                        writeln!(
+                                            &mut file_writer,
+                                            "Error while parsing a regex from disallow.cfg: {}",
+                                            i
+                                        );
+                                    }
                                 }
                             }
                             let link = main_url.join(link).unwrap();
-                            let query_chk = link.query();
-                            match query_chk {
-                                Some(query) => {
-                                    // print versions of pages are mostly equal to regular ones, so we'll skip them
-                                    if query.contains("print=Y") {
-                                        flag = true;
-                                    }
-                                }
-                                None => {}
-                            }
                             if !flag {
                                 let link = url_normalizer::normalize(link);
                                 match link {
@@ -305,14 +225,14 @@ fn main() {
                 Some(p) => path = Some(String::from(p)),
                 None => {
                     path = None;
-                    let term = term_writer::new(true);
+                    let term = TermWriter::new(true);
                     term.print_to_term(format!("Found key -p which is not followed by a path, assuming path is executable's directory."));
                 }
             },
             _ => {}
         }
     }
-    let term = term_writer::new(active_term);
+    let term = TermWriter::new(active_term);
     let fil: std::io::Result<File>;
     let final_messg: String;
     let logger = File::create("XmlSiteMapper-rs.log");
@@ -346,6 +266,7 @@ fn main() {
                     }
                 }
             }
+            exts.insert(String::from(".*/.*print=Y"));
         }
         Err(_) => {
             term.print_to_term(format!(
@@ -356,14 +277,14 @@ fn main() {
                 Ok(_) => {
                     term.print_to_term(format!("==="));
                     term.print_to_term(format!("Created file disallow.cfg."));
-                    term.print_to_term(format!("This file is used to contain all file extensions which should be excluded from sitemap."));
-                    term.print_to_term(format!("For example, if .pdf is on the list then link 'https://foo.com/bar.pdf' won't be included in the sitemap."));
+                    term.print_to_term(format!("This file is used to contain all url parts which should be excluded from sitemap."));
+                    term.print_to_term(format!("For example, if .*.pdf is on the list then link 'https://foo.com/bar.pdf' won't be included in the sitemap."));
                     term.print_to_term(format!(
                         "You can also write comments in site.cfg starting the lines with #.",
                     ));
-                    let data = "# For example, you can exclude all URLs leading to .png images.
+                    let data = "# For example, you can exclude all URLs leading to .png images by writing a regex with it.
 # To do this, you should write one line per each file type (note, that mapper is case sensetive, so .png and .PNG are different file types for it)\n# The result should look like next line without '# ':
-# .png\n# This will make all URLs like https://foo.bar/cool_image.png excluded from sitemap.xml.";
+# .*.png\n# This will make all URLs like https://foo.bar/cool_image.png excluded from sitemap.xml.";
                     std::fs::write("disallow.cfg", data).expect("Unable to write file");
                 }
                 Err(_) => {
@@ -408,8 +329,8 @@ fn main() {
                 Ok(_) => {
                     term.print_to_term(format!("==="));
                     term.print_to_term(format!("Created file change_prio.cfg."));
-                    term.print_to_term(format!("This file is used to show which queries in url should be lowered in priority."));
-                    term.print_to_term(format!("For each query the first line should contain its name and the second one should contain the number"));
+                    term.print_to_term(format!("This file is used to show which url containing listed lines should be lowered or increased in priority."));
+                    term.print_to_term(format!("For each one the first line should contain the part of url written with regex and the second one should contain the number"));
                     term.print_to_term(format!(
                         "For example 0.5 for raise priority for 0.5 or -0.3 to lower it by 0.3.",
                     ));
@@ -417,8 +338,8 @@ fn main() {
                         "You can also write comments in site.cfg starting the lines with #.",
                     ));
                     let data = "# For example, you can lower priority for all URLs with PAGEN_1 contained in query.
-# To do this, you should write two lines, containing 1) query name 2) priority change\n# The result should look like next two comment lines without '# ':
-# PAGEN_1\n# -0.2\n# This will lower priority for all pages like https://foo.bar/PAGEN_1=50 by 0.2.";
+# To do this, you should write two lines, containing 1) regex containing PAGEN_1 2) priority change\n# The result should look like next two comment lines without '# ':
+# .*PAGEN_1.*\n# -0.2\n# This will lower priority for all pages like https://foo.bar/?PAGEN_1=50 by 0.2.";
                     std::fs::write("change_prio.cfg", data).expect("Unable to write file");
                 }
                 Err(_) => {
@@ -524,7 +445,7 @@ fn main() {
                 }
             }
             term.print_to_term(format!("\n=====\nTotal urls added: {}\n=====", map.len()));
-            let mut writer = xml_writer::new(file);
+            let mut writer = XmlWriter::new(file);
             // TODO: Write a checker for xml writer Result<()>
             writer.comment(String::from("=== Created with XmlSiteMapper-rs ==="));
             writer.open_element_attr(
