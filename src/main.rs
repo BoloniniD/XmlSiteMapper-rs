@@ -14,6 +14,28 @@ use terminal_writer::TermWriter;
 mod xml_file_writer;
 use xml_file_writer::XmlWriter;
 
+pub struct Mapper {
+    main_url: Url,
+    disallowed_extensions: HashSet<String>,
+    change_prio: HashMap<String, f64>,
+    delay: u64,
+}
+
+impl Mapper {
+    pub fn new(main_url: Url, disallowed_extensions: HashSet<String>, change_prio: HashMap<String, f64>, delay: u64) -> Mapper {
+        Mapper{main_url, disallowed_extensions, change_prio, delay}
+    }
+
+    fn scan_link(map: &mut HashMap<Url, f64>, log: &mut File, term: &TermWriter) {
+
+    }
+
+    pub fn generate_sitemap(log: &mut File, term: &TermWriter) -> HashMap<Url, f64> {
+        let mut result_map = HashMap::<Url, f64>::new();
+        Mapper::scan_link(result_map, )
+    }
+}
+
 fn scan_link(
     main_url: Url,
     map: &mut HashMap<Url, f64>,
