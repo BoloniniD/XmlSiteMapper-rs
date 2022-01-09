@@ -14,6 +14,10 @@ impl TermWriter {
         }
     }
 
+    pub fn switch_mode(&mut self) {
+        self.active = !self.active;
+    }
+
     pub fn print_progress(&self, links: i64, total: usize) {
         if !self.active {
             return;

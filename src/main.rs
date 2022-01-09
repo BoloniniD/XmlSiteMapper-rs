@@ -14,72 +14,74 @@ use terminal_writer::TermWriter;
 mod xml_file_writer;
 use xml_file_writer::XmlWriter;
 
-fn scan_link(
+pub struct Mapper {
     main_url: Url,
-    map: &mut HashMap<Url, f64>,
-    exts: HashSet<String>,
-    chng: HashMap<String, f64>,
+    disallowed_extensions: HashSet<String>,
+    change_prio: HashMap<String, f64>,
     delay: u64,
-    log: &mut File,
-    term: &TermWriter,
-) {
-    // TODO: create a class and split it into several methods
-    // TODO: write comments
-    let mut file_writer = BufWriter::new(log);
-    let mut queue: VecDeque<Url> = VecDeque::new();
-    let mut set: HashSet<Url> = HashSet::new();
-    let mut links: i64 = 1;
-    queue.push_front(main_url.clone());
-    set.insert(main_url.clone());
-    term.start_progress(links, map.len());
-    writeln!(
-        &mut file_writer,
-        "Crawling start: [{}, {}]",
-        Utc::now().date(),
-        Utc::now().time().format("%H:%M:%S")
-    );
-    while !queue.is_empty() {
-        writeln!(
-            &mut file_writer,
+    term: TermWriter,
+}
+
+impl Mapper {
+    pub fn new(main_url: Url, disallowed_extensions: HashSet<String>, change_prio: HashMap<String, f64>, delay: u64, terminal: TermWriter) -> Mapper {
+        Mapper{main_url, disallowed_extensions, change_prio, delay, term: terminal}
+    }
+
+    fn start_logging(&mut self, links: i64, map_len: usize, file_writer: &mut BufWriter<&mut File>) {
+        self.term.start_progress(links, map_len);
+        match writeln!(
+            file_writer,
+            "Crawling start: [{}, {}]",
+            Utc::now().date(),
+            Utc::now().time().format("%H:%M:%S")
+        ) {
+            Ok(_) => {
+                // OK
+            },
+            Err(_) => {
+                // UNABLE TO WRITE LOG
+            },
+        }
+    }
+
+    fn log_progress(&mut self, links: i64, map_len: usize, file_writer: &mut BufWriter<&mut File>) {
+        match writeln!(
+            file_writer,
             "\nSize of queue on this iteration: {}",
             links
-        );
-        term.print_progress(links, map.len());
-        let ten_millis = std::time::Duration::from_millis(delay);
-        thread::sleep(ten_millis);
-        let queue_pop = queue.pop_back();
-        links -= 1;
-        let mut url: Url;
-        match queue_pop {
-            Some(queue_pop) => {
-                url = queue_pop;
-            }
-            None => {
-                continue;
+        ) {
+            Ok(_) => {
+                // OK
+            },
+            Err(_) => {
+                // UNABLE TO WRITE LOG
             }
         }
+        self.term.print_progress(links, map_len);
+    }
+
+    fn normalize_url(&self, url: Url) -> Option<Url> {
         let norm = url_normalizer::normalize(url);
         match norm {
-            Ok(norm) => {
-                url = norm;
-                let u = url.set_scheme(main_url.scheme());
+            Ok(mut norm) => {
+                let u = norm.set_scheme(self.main_url.scheme());
                 match u {
-                    Ok(_) => {}
+                    Ok(_) => {
+                        Some(norm)
+                    },
                     Err(_) => {
-                        continue;
+                        None
                     }
                 }
             }
             Err(_) => {
-                continue;
+                None
             }
         }
-        if url.domain() != main_url.domain() {
-            continue;
-        }
-        writeln!(&mut file_writer, "\nWorking with '{}' now", url.as_str());
+    }
+
+    fn priority_changes_segment_count(&self, mut priority: f64, url: &Url) -> f64 {
         let seg = url.path_segments();
-        let mut priority: f64 = 1.0;
         match seg {
             Some(seg) => {
                 priority -= 0.1 * (seg.count() as f64 - 1.0 + url.query_pairs().count() as f64);
@@ -88,30 +90,37 @@ fn scan_link(
                 priority -= 0.1 * (url.query_pairs().count() as f64);
             }
         }
+        priority
+    }
+
+    fn update_map(&self, map: &mut HashMap<Url, f64>, url: &Url, priority: &mut f64, file_writer: &mut BufWriter<&mut File>) {
         if !map.contains_key(&url) {
             let url_str = url.as_str();
-            for i in chng.iter() {
+            for i in self.change_prio.iter() {
                 let re = Regex::new(i.0);
                 match re {
                     Ok(re) => {
                         if re.is_match(url_str) {
-                            priority += i.1;
+                            *priority += i.1;
                         }
                     }
                     Err(_) => {
                         writeln!(
-                            &mut file_writer,
+                            file_writer,
                             "Error while parsing a regex from disallow.cfg: {}",
                             i.0
                         );
                     }
                 }
             }
-            if priority < 0.1 {
-                priority = 0.1;
+            if *priority < 0.1 {
+                *priority = 0.1;
             }
-            map.insert(url.clone(), priority);
+            map.insert(url.clone(), *priority);
         }
+    }
+
+    fn get_body(&self, url: &Url, file_writer: &mut BufWriter<&mut File>) -> Option<reqwest::blocking::Response> {
         let client = reqwest::blocking::Client::new();
         let client = client.get(url.clone()).send();
         let body: reqwest::blocking::Response;
@@ -120,136 +129,165 @@ fn scan_link(
                 body = res;
             }
             Err(_) => {
-                continue;
+                return None;
             }
         }
         match body.status() {
             StatusCode::OK => {
-                writeln!(&mut file_writer, "Successfully pinged '{}'.", url);
+                writeln!(file_writer, "Successfully pinged '{}'.", url);
+                Some(body)
             }
             s => {
-                writeln!(&mut file_writer, "Received {} status code, skipping...", s);
-                continue;
+                writeln!(file_writer, "Received {} status code, skipping...", s);
+                None
             }
         }
-        let url_check = body.headers().get("Content-Type");
-        match url_check {
+    }
+
+    fn check_header(&self, body: &reqwest::blocking::Response) -> bool {
+        match body.headers().get("Content-Type") {
             Some(url_check) => {
-                let url_check = url_check.to_str();
-                match url_check {
+                match url_check.to_str() {
                     Ok(st) => {
                         if String::from(st).starts_with("text/html") {
+                            return true;
                         } else {
-                            continue;
+                            return false;
                         }
                     }
                     Err(_) => {
-                        continue;
+                        return false;
                     }
                 }
             }
             None => {
+                return false;
+            }
+        }
+    }
+
+    fn check_disallowed(&self, link: &str, file_writer: &mut BufWriter<&mut File>) -> bool {
+        let mut flag = false;
+        for i in self.disallowed_extensions.iter() {
+            let re = Regex::new(i);
+            match re {
+                Ok(re) => {
+                    if re.is_match(link) {
+                        flag = true;
+                    }
+                }
+                Err(_) => {
+                    writeln!(
+                        file_writer,
+                        "Error while parsing a regex from disallow.cfg: {}",
+                        i
+                    );
+                }
+            }
+        }
+        flag
+    }
+
+    fn scan_link(&mut self, map: &mut HashMap<Url, f64>, log: &mut File) {
+        let mut file_writer = BufWriter::new(log);
+        let mut queue: VecDeque<Url> = VecDeque::new();
+        let mut set: HashSet<Url> = HashSet::new();
+        let mut links: i64 = 1;
+        queue.push_front(self.main_url.clone());
+        set.insert(self.main_url.clone());
+        self.start_logging(links, map.len(), &mut file_writer);
+        while !queue.is_empty() {
+            self.log_progress(links, map.len(), &mut file_writer);
+            let ten_millis = std::time::Duration::from_millis(self.delay);
+            thread::sleep(ten_millis);
+            let queue_pop = queue.pop_back();
+            links -= 1;
+            let mut url: Url;
+            match queue_pop {
+                Some(queue_pop) => {
+                    url = queue_pop;
+                }
+                None => {
+                    continue;
+                }
+            }
+            match self.normalize_url(url) {
+                Some(normalized) => {
+                    url = normalized;
+                },
+                None => {
+                    continue;
+                }
+            }
+            if url.domain() != self.main_url.domain() {
                 continue;
             }
-        }
-        let body = body.text();
-        match body {
-            Ok(body) => {
-                let html = body;
-                let html = Document::from(html.as_str());
-                html.find(Name("a"))
-                    .filter_map(|h| h.attr("href"))
-                    .for_each(|link| {
-                        if ((link.starts_with('/')) && (link != "/"))
-                            || (link.starts_with(main_url.as_str()))
-                        {
-                            let mut flag = false;
-                            for i in exts.iter() {
-                                let re = Regex::new(i);
-                                match re {
-                                    Ok(re) => {
-                                        if re.is_match(link) {
-                                            flag = true;
-                                        }
-                                    }
-                                    Err(_) => {
-                                        writeln!(
-                                            &mut file_writer,
-                                            "Error while parsing a regex from disallow.cfg: {}",
-                                            i
-                                        );
-                                    }
-                                }
-                            }
-                            let link = main_url.join(link).unwrap();
-                            if !flag {
-                                let link = url_normalizer::normalize(link);
-                                match link {
-                                    Ok(link) => {
-                                        if !set.contains(&link) {
-                                            links += 1;
-                                            set.insert(link.clone());
-                                            queue.push_front(link);
-                                        }
-                                    }
-                                    Err(_) => {}
-                                }
-                            }
-                        }
-                    });
+            writeln!(&mut file_writer, "\nWorking with '{}' now", url.as_str());
+            let mut priority: f64 = 1.0;
+            priority = self.priority_changes_segment_count(priority, &url);
+            self.update_map(map, &url, &mut priority, &mut file_writer);
+            let mut body: reqwest::blocking::Response;
+            match self.get_body(&url, &mut file_writer) {
+                Some(result) => {
+                    body = result;
+                },
+                None => {
+                    continue;
+                }
             }
-            Err(_) => {}
+            match self.check_header(&body) {
+                false => {
+                    continue;
+                },
+                true => {},
+            }
+            let body = body.text();
+            match body {
+                Ok(body) => {
+                    let html = body;
+                    let html = Document::from(html.as_str());
+                    html.find(Name("a"))
+                        .filter_map(|h| h.attr("href"))
+                        .for_each(|link| {
+                            if ((link.starts_with('/')) && (link != "/"))
+                                || (link.starts_with(self.main_url.as_str()))
+                            {
+                                let flag = self.check_disallowed(link, &mut file_writer);
+                                let link = self.main_url.join(link).unwrap();
+                                if !flag {
+                                    let link = url_normalizer::normalize(link);
+                                    match link {
+                                        Ok(link) => {
+                                            if !set.contains(&link) {
+                                                links += 1;
+                                                set.insert(link.clone());
+                                                queue.push_front(link);
+                                            }
+                                        }
+                                        Err(_) => {}
+                                    }
+                                }
+                            }
+                        });
+                }
+                Err(_) => {}
+            }
         }
+        writeln!(
+            &mut file_writer,
+            "Crawling end: [{}]\nBuilding file sitemap.xml.",
+            Utc::now().time().format("%H:%M:%S")
+        );
     }
-    writeln!(
-        &mut file_writer,
-        "Crawling end: [{}]\nBuilding file sitemap.xml.",
-        Utc::now().time().format("%H:%M:%S")
-    );
+
+    pub fn generate_sitemap(&mut self, mut log: &mut File) -> HashMap<Url, f64> {
+        let mut result_map = HashMap::<Url, f64>::new();
+        self.scan_link(&mut result_map, &mut log);
+        result_map
+    }
 }
 
-fn main() {
-    let args: Vec<String> = env::args().collect();
-    let mut active_term = true;
-    let mut path: Option<String> = None;
-    for it in 0..args.len() {
-        let arg = args[it].as_str();
-        match arg {
-            "--help" => {
-                println!("[-p <path>] [-s | --silent]");
-                return;
-            }
-            "--silent" => active_term = false,
-            "-s" => active_term = false,
-            "-p" => match args.get(it + 1) {
-                Some(p) => path = Some(String::from(p)),
-                None => {
-                    path = None;
-                    let term = TermWriter::new(true);
-                    term.print_to_term(format!("Found key -p which is not followed by a path, assuming path is executable's directory."));
-                }
-            },
-            _ => {}
-        }
-    }
-    let term = TermWriter::new(active_term);
-    let fil: std::io::Result<File>;
-    let final_messg: String;
-    let logger = File::create("XmlSiteMapper-rs.log");
-    let file: File;
-    let mut log: File;
-    match logger {
-        Ok(logger) => {
-            log = logger;
-        }
-        Err(_) => {
-            term.print_to_term(format!("Cannot create file XmlSiteMapper-rs.log. Please check if file creation is allowed in the directory."));
-            return;
-        }
-    }
-    let mut exts: HashSet<String> = HashSet::new();
-    let mut chng: HashMap<String, f64> = HashMap::new();
-
+fn read_disallowed_exts(term: &TermWriter, exts: &mut HashSet<String>) {
     let disallowed = File::open("disallow.cfg");
     match disallowed {
         Ok(disallowed) => {
@@ -293,7 +331,9 @@ fn main() {
             }
         }
     }
+}
 
+fn read_priority_changes(term: &TermWriter, chng: &mut HashMap<String, f64>) {
     let to_change = File::open("change_prio.cfg");
     match to_change {
         Ok(to_change) => {
@@ -348,8 +388,9 @@ fn main() {
             }
         }
     }
-    let mut delay: u64 = 25;
-    let mut url = String::new();
+}
+
+fn read_site(term: &TermWriter, url: &mut String, delay: &mut u64) {
     let site = File::open("site.cfg");
     match site {
         Ok(site) => {
@@ -360,12 +401,12 @@ fn main() {
                     Ok(line) => {
                         if !line.starts_with("#") {
                             if flag {
-                                url = line;
+                                *url = line;
                                 flag = false;
                             } else {
                                 let delay_chk = line.parse::<u64>();
                                 match delay_chk {
-                                    Ok(d) => delay = d,
+                                    Ok(d) => *delay = d,
                                     Err(_) => {
                                         continue;
                                     }
@@ -412,14 +453,66 @@ fn main() {
             }
         }
     }
+}
+
+fn main() {
+    let args: Vec<String> = env::args().collect();
+    let mut active_term = true;
+    let mut path: Option<String> = None;
+    for it in 0..args.len() {
+        let arg = args[it].as_str();
+        match arg {
+            "--help" => {
+                println!("[-p <path>] [-s | --silent]");
+                return;
+            }
+            "--silent" => active_term = false,
+            "-s" => active_term = false,
+            "-p" => match args.get(it + 1) {
+                Some(p) => path = Some(String::from(p)),
+                None => {
+                    path = None;
+                    let term = TermWriter::new(true);
+                    term.print_to_term(format!("Found key -p which is not followed by a path, assuming path is executable's directory."));
+                }
+            },
+            _ => {}
+        }
+    }
+    let term = TermWriter::new(active_term);
+    let fil: std::io::Result<File>;
+    let final_messg: String;
+    let logger = File::create("XmlSiteMapper-rs.log");
+    let file: File;
+    let mut log: File;
+    match logger {
+        Ok(logger) => {
+            log = logger;
+        }
+        Err(_) => {
+            term.print_to_term(format!("Cannot create file XmlSiteMapper-rs.log. Please check if file creation is allowed in the directory."));
+            return;
+        }
+    }
+    let mut exts: HashSet<String> = HashSet::new();
+    let mut chng: HashMap<String, f64> = HashMap::new();
+
+    read_disallowed_exts(&term, &mut exts);
+    read_priority_changes(&term, &mut chng);
+
+    let mut delay: u64 = 25;
+    let mut url = String::new();
+
+    read_site(&term, &mut url, &mut delay);
+    
     let url = Url::parse(&url);
     match url {
-        Ok(_) => {
-            let mut map = HashMap::new();
+        Ok(main_url) => {
             term.print_to_term(format!(
                 "All necessary files checked, starting sitemap.xml generation."
             ));
-            scan_link(url.unwrap(), &mut map, exts, chng, delay, &mut log, &term);
+            let mut mapper = Mapper::new(main_url, exts, chng, delay, term.clone());
+            let map = mapper.generate_sitemap(&mut log);
             match path {
                 Some(path) => {
                     final_messg = format!(
