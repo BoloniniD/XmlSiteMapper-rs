@@ -287,48 +287,7 @@ impl Mapper {
     }
 }
 
-fn main() {
-    let args: Vec<String> = env::args().collect();
-    let mut active_term = true;
-    let mut path: Option<String> = None;
-    for it in 0..args.len() {
-        let arg = args[it].as_str();
-        match arg {
-            "--help" => {
-                println!("[-p <path>] [-s | --silent]");
-                return;
-            }
-            "--silent" => active_term = false,
-            "-s" => active_term = false,
-            "-p" => match args.get(it + 1) {
-                Some(p) => path = Some(String::from(p)),
-                None => {
-                    path = None;
-                    let term = TermWriter::new(true);
-                    term.print_to_term(format!("Found key -p which is not followed by a path, assuming path is executable's directory."));
-                }
-            },
-            _ => {}
-        }
-    }
-    let term = TermWriter::new(active_term);
-    let fil: std::io::Result<File>;
-    let final_messg: String;
-    let logger = File::create("XmlSiteMapper-rs.log");
-    let file: File;
-    let mut log: File;
-    match logger {
-        Ok(logger) => {
-            log = logger;
-        }
-        Err(_) => {
-            term.print_to_term(format!("Cannot create file XmlSiteMapper-rs.log. Please check if file creation is allowed in the directory."));
-            return;
-        }
-    }
-    let mut exts: HashSet<String> = HashSet::new();
-    let mut chng: HashMap<String, f64> = HashMap::new();
-
+fn read_disallowed_exts(term: &TermWriter, exts: &mut HashSet<String>) {
     let disallowed = File::open("disallow.cfg");
     match disallowed {
         Ok(disallowed) => {
@@ -372,7 +331,9 @@ fn main() {
             }
         }
     }
+}
 
+fn read_priority_changes(term: &TermWriter, chng: &mut HashMap<String, f64>) {
     let to_change = File::open("change_prio.cfg");
     match to_change {
         Ok(to_change) => {
@@ -427,8 +388,9 @@ fn main() {
             }
         }
     }
-    let mut delay: u64 = 25;
-    let mut url = String::new();
+}
+
+fn read_site(term: &TermWriter, url: &mut String, delay: &mut u64) {
     let site = File::open("site.cfg");
     match site {
         Ok(site) => {
@@ -439,12 +401,12 @@ fn main() {
                     Ok(line) => {
                         if !line.starts_with("#") {
                             if flag {
-                                url = line;
+                                *url = line;
                                 flag = false;
                             } else {
                                 let delay_chk = line.parse::<u64>();
                                 match delay_chk {
-                                    Ok(d) => delay = d,
+                                    Ok(d) => *delay = d,
                                     Err(_) => {
                                         continue;
                                     }
@@ -491,6 +453,58 @@ fn main() {
             }
         }
     }
+}
+
+fn main() {
+    let args: Vec<String> = env::args().collect();
+    let mut active_term = true;
+    let mut path: Option<String> = None;
+    for it in 0..args.len() {
+        let arg = args[it].as_str();
+        match arg {
+            "--help" => {
+                println!("[-p <path>] [-s | --silent]");
+                return;
+            }
+            "--silent" => active_term = false,
+            "-s" => active_term = false,
+            "-p" => match args.get(it + 1) {
+                Some(p) => path = Some(String::from(p)),
+                None => {
+                    path = None;
+                    let term = TermWriter::new(true);
+                    term.print_to_term(format!("Found key -p which is not followed by a path, assuming path is executable's directory."));
+                }
+            },
+            _ => {}
+        }
+    }
+    let term = TermWriter::new(active_term);
+    let fil: std::io::Result<File>;
+    let final_messg: String;
+    let logger = File::create("XmlSiteMapper-rs.log");
+    let file: File;
+    let mut log: File;
+    match logger {
+        Ok(logger) => {
+            log = logger;
+        }
+        Err(_) => {
+            term.print_to_term(format!("Cannot create file XmlSiteMapper-rs.log. Please check if file creation is allowed in the directory."));
+            return;
+        }
+    }
+    let mut exts: HashSet<String> = HashSet::new();
+    let mut chng: HashMap<String, f64> = HashMap::new();
+
+    read_disallowed_exts(&term, &mut exts);
+    read_priority_changes(&term, &mut chng);
+
+    let mut delay: u64 = 25;
+    let mut url = String::new();
+
+    read_site(&term, &mut url, &mut delay);
+    
     let url = Url::parse(&url);
     match url {
         Ok(main_url) => {
