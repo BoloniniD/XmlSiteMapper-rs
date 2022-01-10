@@ -225,7 +225,6 @@ impl Mapper {
             writeln!(&mut file_writer, "\nWorking with '{}' now", url.as_str());
             let mut priority: f64 = 1.0;
             priority = self.priority_changes_segment_count(priority, &url);
-            self.update_map(map, &url, &mut priority, &mut file_writer);
             let mut body: reqwest::blocking::Response;
             match self.get_body(&url, &mut file_writer) {
                 Some(result) => {
@@ -235,6 +234,7 @@ impl Mapper {
                     continue;
                 }
             }
+            self.update_map(map, &url, &mut priority, &mut file_writer);
             match self.check_header(&body) {
                 false => {
                     continue;
